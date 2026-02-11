@@ -1,0 +1,25 @@
+services:
+  emmc-rag-agent:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: emmc-rag-agent
+    ports:
+      - "8000:8000"  # FastAPI
+      - "8501:8501"  # Streamlit
+    environment:
+      - DEEPSEEK_API_KEY=${DEEPSEEK_API_KEY}
+    volumes:
+      # Persist vector database (read-write for ChromaDB locks)
+      - ./vector_db:/app/vector_db
+      # Persist generated test cases
+      - ./test_cases:/app/test_cases
+      # Mount .env file
+      - ./.env:/app/.env:ro
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s

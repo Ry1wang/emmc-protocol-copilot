@@ -1,0 +1,46 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+venv/
+env/
+ENV/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Git
+.git/
+.gitignore
+
+# Logs
+*.log
+
+# Temporary files
+*.tmp
+*.bak
+
+# Documentation (optional, keep if needed in container)
+docs/
+*.md
+
+# Test files
+test_*.py
+diagnose_*.py
+
+# Old versions
+OldVersion/
+practice_files/
+
+# Output (will be generated in container)
+output/
+test_cases/

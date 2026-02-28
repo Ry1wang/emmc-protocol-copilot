@@ -1,0 +1,42 @@
+# Environment
+.env
+.env.local
+
+# Python
+__pycache__/
+*.py[cod]
+*.so
+*.egg
+*.egg-info/
+dist/
+build/
+
+# uv / virtualenv
+.venv/
+
+# Data pipeline outputs (regeneratable)
+data/raw/
+data/processed/
+data/vectorstore/
+
+# Logs
+logs/
+*.log
+
+# macOS
+.DS_Store
+
+# IDE
+.vscode/
+.idea/
+
+# Jupyter
+.ipynb_checkpoints/
+
+# Test cache
+.pytest_cache/
+.coverage
+htmlcov/
+
+# Protocol
+docs/protocol/

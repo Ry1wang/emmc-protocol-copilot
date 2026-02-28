@@ -12,9 +12,9 @@ from .chunkers.figure import FigureChunker
 from .chunkers.table import TableChunker
 from .chunkers.text import TextChunker
 from .classifier import BlockClassifier
-from .parser import PDFParser, PageModel
+from .parser import PDFParser
 from .schema import ContentType, EMMCChunk
-from .structure import DocumentStructure, SectionNode, StructureExtractor
+from .structure import DocumentStructure, SectionNode, StructureExtractor, _normalize_label
 
 logger = logging.getLogger(__name__)
 
@@ -27,61 +27,51 @@ logger = logging.getLogger(__name__)
 # These values are tuned based on 50-chunk sampling analysis to filter out
 # "stub" chunks (e.g. only a header, only "cont'd", or only a few noise chars).
 _MIN_RAW_CHARS_BY_TYPE = {
-    ContentType.TEXT: 40,       # At least a full sentence or bullet point
-    ContentType.TABLE: 80,      # Enough to contain header + at least one data row
+    ContentType.TEXT: 20,       # Allow shorter technical lists/signal names
+    ContentType.TABLE: 80,      # Full-table chunk: header + separator + ≥1 data row
     ContentType.FIGURE: 30,     # Caption or detailed label
     ContentType.BITMAP: 30,     # Caption or technical label
     ContentType.DEFINITION: 8,  # Short terms like "CMD: Command" are valid
     ContentType.REGISTER: 40,   # Register name + base address/bit range
 }
 
+# Row-group chunks are intentionally small (header + separator + 1 key's rows).
+# The absolute minimum is: one header cell + separator + one data cell ≈ 25 chars.
+_MIN_RAW_CHARS_ROW_CHUNK = 25
+
 # Patterns to detect pure continuation markers or watermark leftovers
 _NOISE_PATTERNS = [
     re.compile(r"^(cont'd|continued|continued\s+on\s+next\s+page|to\s+be\s+continued)\.?$", re.IGNORECASE),
-    re.compile(r"^(downloaded\s+by|ruyi|jEDEC\s+Standard).*$", re.IGNORECASE),
+    re.compile(r"^(downloaded\s+by|ruyi|JEDEC\s+Standard).*$", re.IGNORECASE),
 ]
 
 def _is_valid_chunk(chunk: EMMCChunk) -> bool:
-    """Check if a chunk has meaningful content by excluding metadata prefix.
-    
-    A chunk is valid if its main content body (excluding the generated 
-    header prefix) meets the technical threshold for its type and is 
-    not a known noise pattern.
+    """Check if a chunk has meaningful content.
+
+    Uses raw_text (content without the generated prefix) so the check is
+    independent of prefix format and works correctly for all content types.
+
+    Row-group TABLE chunks use a lower threshold than full-table chunks because
+    they are intentionally small (one primary-key group + header ≈ 25–80 chars).
     """
-    # 1. Extract the main content body from the combined text.
-    # The first line is always the generated prefix: [eMMC 5.1 | Section | Page]
-    lines = chunk.text.strip().split('\n')
-    if len(lines) <= 1:
-        # No content body, just a header
-        content_body = ""
+    content = chunk.raw_text.strip()
+    content_len = len(content)
+
+    # Pick the applicable minimum length
+    if chunk.is_row_chunk:
+        min_chars = _MIN_RAW_CHARS_ROW_CHUNK
     else:
-        content_body = "\n".join(lines[1:]).strip()
-    
-    content_len = len(content_body)
+        min_chars = _MIN_RAW_CHARS_BY_TYPE.get(chunk.content_type, 30)
 
-    # 2. Check length against type-specific thresholds
-    min_chars = _MIN_RAW_CHARS_BY_TYPE.get(chunk.content_type, 30)
     if content_len < min_chars:
-        # Special case: Register bits can be short (e.g. "[187]"), allow if in Register context
-        if chunk.content_type == ContentType.REGISTER and content_len > 5:
-            pass 
-        else:
-            return False
+        return False
 
-    # 3. Filter out pure continuation markers or margin noise
-    if any(p.match(content_body) for p in _NOISE_PATTERNS):
+    # Filter out pure continuation markers or margin noise
+    if any(p.match(content) for p in _NOISE_PATTERNS):
         return False
 
     return True
 
-
-def _normalize_heading(text: str) -> str:
-    """Normalize a potential heading text from a PDF block."""
-    text = text.strip().lower()
-    # Remove common PDF extraction artifacts in headings
-    text = re.sub(r"\s+", " ", text)
-    text = text.strip(". ")
-    return text
 
 
 # ---------------------------------------------------------------------------
@@ -121,23 +111,18 @@ class IngestionResult:
     def stats(self) -> dict[str, int]:
         from collections import Counter
 
-        # Count chunks filtered out due to insufficient content
+        searchable = self.searchable_chunks
+        ctype_counts = Counter(c.content_type for c in searchable)
+
+        front_matter_count = sum(1 for c in self.chunks if c.is_front_matter)
         short_filtered = sum(
             1 for c in self.chunks
-            if not _is_valid_chunk(c) and not c.is_front_matter
-        )
-
-        # Count content types in searchable chunks
-        ctype_counts = Counter(c.content_type for c in self.searchable_chunks)
-
-        # Front matter = total - searchable - short_filtered
-        front_matter_count = (
-            len(self.chunks) - len(self.searchable_chunks) - short_filtered
+            if not c.is_front_matter and not _is_valid_chunk(c)
         )
 
         return {
             "total": len(self.chunks),
-            "searchable": len(self.searchable_chunks),
+            "searchable": len(searchable),
             "front_matter": front_matter_count,
             "short_filtered": short_filtered,
             **{str(k): v for k, v in ctype_counts.items()},
@@ -232,46 +217,56 @@ class IngestionPipeline:
 
         for page in pages:
             page_num = page.page_num
-            # Fallback section for this page (from TOC)
-            page_default_section = structure.page_to_section.get(page_num)
-            
+            page_toc_section = structure.page_to_section.get(page_num)
+
+            # --- Page-level section boundary (TOC-based, coarse-grained) ---
+            #
+            # When the TOC assigns a different section to this page, flush any
+            # accumulated text from the previous section and switch.  This is the
+            # primary mechanism that ensures every page is attributed to the
+            # correct section even when no heading text block is present.
+            #
+            # Sub-page detection (inside the block loop) provides finer-grained
+            # updates within a page when multiple sections share the same page.
+            if page_toc_section is not current_section:
+                if text_accumulator:
+                    _flush_text()
+                current_section = page_toc_section
+
             # Text from all blocks on this page for nearby-text lookups
             page_raw_text = " ".join(tb.text for tb in page.text_blocks)
 
             # Classify all blocks on the page
-            classified = self._classifier.classify_page(page, current_section or page_default_section)
-
-            # Collect raw text for definition extraction (Round 1)
-            # Use current_section if already switched, otherwise fallback
-            for cb in classified:
-                section_for_def = current_section or page_default_section
-                if section_for_def and not section_for_def.is_front_matter:
-                    bucket = section_texts.setdefault(section_for_def.page_start, [])
-                    if cb.text_block:
-                        bucket.append(cb.text_block.text)
+            classified = self._classifier.classify_page(page, current_section)
 
             for cb in classified:
-                # P1: Sub-page section detection
-                # If this text block matches a TOC heading, switch section immediately
+                # --- Step 1: sub-page section detection (fine-grained) ---
+                #
+                # If this text block's exact text matches a TOC label, a section
+                # boundary occurs mid-page.  Flush the old section's accumulator
+                # before switching.
                 if cb.text_block and cb.content_type == ContentType.TEXT:
-                    # Heuristic: Headings are usually larger or bold
-                    # font_flags: bold=20; but also check exact text match against TOC
-                    norm_text = _normalize_heading(cb.text_block.text)
-                    hit_section = structure.label_to_section.get(norm_text)
-                    
+                    hit_section = structure.label_to_section.get(
+                        _normalize_label(cb.text_block.text)
+                    )
                     if hit_section and hit_section is not current_section:
-                        # Flush accumulated content from the OLD section
                         if text_accumulator:
                             _flush_text()
-                        
-                        # Switch to the NEW section
                         current_section = hit_section
                         accum_page_start = page_num
                         logger.debug("Switched section at p%d: %s", page_num, hit_section.label)
 
-                # Initialize current_section if not yet set
-                if current_section is None:
-                    current_section = page_default_section
+                # --- Step 2: collect text for definition Round-1 ---
+                #
+                # Done AFTER current_section is updated (both page-level and
+                # sub-page-level) so text is always bucketed into the correct
+                # section.
+                if cb.text_block:
+                    if current_section and not current_section.is_front_matter:
+                        bucket = section_texts.setdefault(current_section.page_start, [])
+                        bucket.append(cb.text_block.text)
+
+                # --- Step 3: route block to the appropriate chunker ---
 
                 if cb.content_type in (ContentType.TEXT, ContentType.REGISTER):
                     # Content-type switch (TEXT ↔ REGISTER) → flush first

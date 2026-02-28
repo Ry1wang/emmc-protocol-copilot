@@ -2,12 +2,15 @@
 
 from __future__ import annotations
 
+import logging
 import re
 from dataclasses import dataclass, field
 from pathlib import Path
 
 import fitz  # PyMuPDF
 import pdfplumber
+
+logger = logging.getLogger(__name__)
 
 
 # ---------------------------------------------------------------------------
@@ -466,8 +469,12 @@ class PDFParser:
                                 clean_row.append(None)
                             else:
                                 c = cell.strip()
-                                # Filter out common single-char noise from table lines (e.g. 'i', 'y')
-                                if len(c) == 1 and c.lower() in 'iyun':
+                                # Filter only 'i' — the sole character reliably produced
+                                # by pdfplumber misreading vertical table-border lines.
+                                # Do NOT filter 'y'/'n'/'u'/'r'/'w' etc.: these are
+                                # valid single-char cell values in eMMC spec tables
+                                # (Y/N = supported/not-supported, U = undefined, etc.).
+                                if c == 'i':
                                     clean_row.append(None)
                                 else:
                                     clean_row.append(_clean_text(c))
@@ -476,7 +483,7 @@ class PDFParser:
                     
                     if clean_rows:
                         tables.append(TableBlock(bbox=bbox, rows=clean_rows))
-        except Exception:
-            pass
+        except Exception as exc:
+            logger.warning("pdfplumber failed on page %d: %s", idx + 1, exc)
         return tables
 

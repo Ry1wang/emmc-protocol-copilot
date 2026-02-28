@@ -128,9 +128,15 @@ class StructureExtractor:
         self._mark_front_matter(sections, body_start)
         page_to_section = self._build_page_map(sections)
 
-        label_map = {
-            _normalize_label(s.label): s for s in sections
-        }
+        # First-seen wins: if two sections share the same normalised label
+        # (e.g. multiple "General" sub-sections), keep the first occurrence so
+        # that sub-page detection in the pipeline always hits a deterministic
+        # section rather than silently jumping to the last duplicate.
+        label_map: dict[str, SectionNode] = {}
+        for s in sections:
+            key = _normalize_label(s.label)
+            if key not in label_map:
+                label_map[key] = s
 
         return DocumentStructure(
             source=self.source,

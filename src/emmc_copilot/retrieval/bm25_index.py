@@ -46,6 +46,7 @@ class BM25Corpus:
         self._ids: list[str] = []
         self._documents: list[str] = [] # text field (with context prefix, for LangChain)
         self._metadatas: list[dict] = []
+        self._id_to_pos: dict[str, int] = {}  # chunk_id → position in _ids list
 
     # ------------------------------------------------------------------
     # Build
@@ -94,6 +95,7 @@ class BM25Corpus:
                     index_text = f"{section_title} {raw_text}"
                     tokens = _tokenize(index_text)
 
+                    corpus._id_to_pos[chunk_id] = len(corpus._ids)
                     tokenized_corpus.append(tokens)
                     corpus._ids.append(chunk_id)
                     corpus._documents.append(text)
@@ -128,6 +130,33 @@ class BM25Corpus:
 
         corpus._bm25 = BM25Okapi(tokenized_corpus)
         return corpus
+
+    # ------------------------------------------------------------------
+    # Neighbor lookup
+    # ------------------------------------------------------------------
+
+    def get_neighbor_ids(self, chunk_id: str, n: int = 1) -> list[str]:
+        """Return up to *n* document-order neighbor IDs on each side of *chunk_id*.
+
+        Neighbors are determined by their position in the JSONL loading order,
+        which reflects physical document order (page / section sequence).
+        The caller is responsible for filtering by section if cross-section
+        bleed is undesirable.
+
+        Args:
+            chunk_id: Target chunk ID.
+            n:        Number of neighbors to return on each side (default 1).
+
+        Returns:
+            List of neighbor chunk IDs (excludes chunk_id itself).
+            Empty list if chunk_id is not in the index.
+        """
+        pos = self._id_to_pos.get(chunk_id)
+        if pos is None:
+            return []
+        lo = max(0, pos - n)
+        hi = min(len(self._ids), pos + n + 1)
+        return [self._ids[i] for i in range(lo, hi) if i != pos]
 
     # ------------------------------------------------------------------
     # Search
@@ -179,6 +208,7 @@ class BM25Corpus:
                     "ids": self._ids,
                     "documents": self._documents,
                     "metadatas": self._metadatas,
+                    "id_to_pos": self._id_to_pos,
                 },
                 f,
                 protocol=pickle.HIGHEST_PROTOCOL,
@@ -195,6 +225,10 @@ class BM25Corpus:
         corpus._ids = data["ids"]
         corpus._documents = data["documents"]
         corpus._metadatas = data["metadatas"]
+        # Rebuild _id_to_pos if missing (backward compat with older pickle files)
+        corpus._id_to_pos = data.get("id_to_pos") or {
+            cid: i for i, cid in enumerate(corpus._ids)
+        }
         logger.info("BM25 corpus loaded from %s (%d chunks)", path, len(corpus._ids))
         return corpus
 

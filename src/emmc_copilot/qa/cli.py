@@ -31,8 +31,11 @@ def _print_sources(docs) -> None:
         section_title = m.get("section_title", "")
         section_label = f"{section_num} {section_title}".strip() if section_num else section_title
 
-        dist = m.get("_distance", float("nan"))
-        print(f"[{i}] {source} | p.{pages} | {section_label}  (dist={dist:.3f})")
+        # _distance is None for BM25-only hits (not present in dense results)
+        dist = m.get("_distance")
+        rrf = m.get("_rrf_score")
+        score_str = f"dist={dist:.3f}" if dist is not None else f"rrf={rrf:.4f}" if rrf is not None else "bm25-only"
+        print(f"[{i}] {source} | p.{pages} | {section_label}  ({score_str})")
 
 
 def _run_ask(question: str, show_sources: bool) -> None:

@@ -83,11 +83,15 @@ class HybridRetriever(BaseRetriever):
     embedder: BGEEmbedder
     store: EMMCVectorStore
     bm25_corpus: BM25Corpus
-    n_results: int = 5
-    n_candidates: int = 20      # per-path candidate count before RRF
+    n_results: int = 15
+    n_candidates: int = 40      # per-path candidate count before RRF
     score_threshold: float = 0.85   # Dense cosine distance filter (lower = more similar)
     rrf_k: int = 60
     collection: str = "docs"
+    neighbor_expand: bool = True    # expand TABLE/REGISTER chunks with adjacent rows
+
+    # Content types that benefit from neighboring-chunk expansion (row-level splits)
+    _EXPAND_TYPES: frozenset[str] = frozenset({"table", "register"})
 
     def _get_relevant_documents(self, query: str, *, run_manager) -> list[Document]:
         # --- Dense path ---
@@ -112,11 +116,19 @@ class HybridRetriever(BaseRetriever):
         # --- RRF fusion ---
         merged = _rrf_merge(dense_hits, bm25_hits, k=self.rrf_k, n_results=self.n_results)
 
+        # --- Neighboring chunk expansion ---
+        if self.neighbor_expand:
+            existing_ids = {hit["id"] for hit in merged}
+            extra = self._expand_neighbors(merged, existing_ids)
+            merged = merged + extra
+            logger.debug("Neighbor expansion added %d extra chunks", len(extra))
+
         return [
             Document(
                 page_content=hit["document"],
                 metadata={
                     **hit["metadata"],
+                    "_id": hit["id"],
                     "_distance": hit.get("distance"),
                     "_bm25_score": hit.get("_bm25_score"),
                     "_rrf_score": hit.get("_rrf_score"),
@@ -124,3 +136,35 @@ class HybridRetriever(BaseRetriever):
             )
             for hit in merged
         ]
+
+    def _expand_neighbors(
+        self, merged: list[dict[str, Any]], existing_ids: set[str]
+    ) -> list[dict[str, Any]]:
+        """For TABLE/REGISTER chunks, fetch adjacent document-order chunks.
+
+        Only adds neighbors that share the same source file and section_path,
+        preventing cross-section bleed at JSONL boundaries.
+        """
+        extra: list[dict[str, Any]] = []
+        for hit in merged:
+            if hit.get("metadata", {}).get("content_type") not in self._EXPAND_TYPES:
+                continue
+
+            hit_source = hit["metadata"].get("source", "")
+            hit_section = hit["metadata"].get("section_path", "")
+
+            neighbor_ids = self.bm25_corpus.get_neighbor_ids(hit["id"], n=1)
+            new_ids = [nid for nid in neighbor_ids if nid not in existing_ids]
+            if not new_ids:
+                continue
+
+            fetched = self.store.get_by_ids(new_ids, collection=self.collection)
+            for f in fetched:
+                if (
+                    f["metadata"].get("source") == hit_source
+                    and f["metadata"].get("section_path") == hit_section
+                ):
+                    extra.append(f)
+                    existing_ids.add(f["id"])
+
+        return extra

@@ -24,7 +24,7 @@ class EMMCRetriever(BaseRetriever):
 
     embedder: BGEEmbedder
     store: EMMCVectorStore
-    n_results: int = 5
+    n_results: int = 15
     collection: str = "docs"
     score_threshold: float = 0.85  # cosine distance < 0.85 → keep (lower = more similar)
 
@@ -34,7 +34,7 @@ class EMMCRetriever(BaseRetriever):
         return [
             Document(
                 page_content=h["document"],
-                metadata={**h["metadata"], "_distance": h["distance"]},
+                metadata={**h["metadata"], "_id": h["id"], "_distance": h["distance"]},
             )
             for h in hits
             if h["distance"] < self.score_threshold

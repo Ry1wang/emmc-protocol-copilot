@@ -130,6 +130,24 @@ class EMMCVectorStore:
             )
         return results
 
+    def get_by_ids(
+        self, ids: list[str], collection: str = "docs"
+    ) -> list[dict[str, Any]]:
+        """Fetch chunks by ID list (no embedding required).
+
+        Returns:
+            List of dicts with keys: id, document, metadata.
+            Missing IDs are silently omitted.
+        """
+        if not ids:
+            return []
+        coll = self._glossary if collection == "glossary" else self._docs
+        raw = coll.get(ids=ids, include=["documents", "metadatas"])
+        return [
+            {"id": rid, "document": doc, "metadata": meta}
+            for rid, doc, meta in zip(raw["ids"], raw["documents"], raw["metadatas"])
+        ]
+
     def existing_ids(self, ids: list[str], collection: str = "docs") -> set[str]:
         """Return the subset of *ids* already present in *collection*."""
         if not ids:

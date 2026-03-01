@@ -18,6 +18,8 @@ dependencies = [
     "FlagEmbedding>=1.2",
     # Frontend
     "chainlit>=1.2",
+    # BM25 keyword retrieval
+    "rank_bm25>=0.2",
     # Utilities
     "python-dotenv>=1.0",
     "typer>=0.24.1",

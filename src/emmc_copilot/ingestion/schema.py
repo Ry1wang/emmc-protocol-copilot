@@ -60,7 +60,7 @@ class EMMCChunk(BaseModel):
     @property
     def section_label(self) -> str:
         """Human-readable section label, e.g. '6.10.4 Detailed command description'."""
-        prefix = ".".join(self.section_path) if self.section_path else ""
+        prefix = self.section_path[-1] if self.section_path else ""
         if prefix and self.section_title:
             return f"{prefix} {self.section_title}"
         return self.section_title or prefix or "(front matter)"

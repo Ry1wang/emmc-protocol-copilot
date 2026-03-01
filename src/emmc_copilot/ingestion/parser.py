@@ -490,20 +490,16 @@ class PDFParser:
             xref = img_info[0]
             width = img_info[2]
             height = img_info[3]
-            # Locate the image bbox on the page
-            for block in fitz_page.get_text("dict").get("blocks", []):
-                if block.get("type") == 1 and block.get("number") == xref:
-                    bbox = tuple(block["bbox"])  # type: ignore[arg-type]
-                    break
-            else:
-                # Fallback: search image list on page
-                rects = fitz_page.get_image_rects(xref)
-                if rects:
-                    r = rects[0]
-                    bbox = (r.x0, r.y0, r.x1, r.y1)
-                else:
-                    continue
-            images.append(ImageBlock(bbox=bbox, xref=xref, width=width, height=height))
+            rects = fitz_page.get_image_rects(xref)
+            if not rects:
+                continue
+            r = rects[0]
+            images.append(ImageBlock(
+                bbox=(r.x0, r.y0, r.x1, r.y1),
+                xref=xref,
+                width=width,
+                height=height,
+            ))
         return images
 
     def _extract_table_blocks(self, idx: int, page_width: float) -> list[TableBlock]:

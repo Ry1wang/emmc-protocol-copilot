@@ -183,7 +183,7 @@ class IngestionPipeline:
         all_chunks: list[EMMCChunk] = []
 
         # Accumulate text per section for definition extraction (Round 1)
-        section_texts: dict[int, list[str]] = {}  # section.page_start → texts
+        section_texts: dict[int, list[str]] = {}  # id(section) → texts
 
         # ---------------------------------------------------------------
         # Cross-page text accumulation state.
@@ -278,7 +278,7 @@ class IngestionPipeline:
                 # section.
                 if cb.text_block:
                     if current_section and not current_section.is_front_matter:
-                        bucket = section_texts.setdefault(current_section.page_start, [])
+                        bucket = section_texts.setdefault(id(current_section), [])
                         bucket.append(cb.text_block.text)
 
                 # --- Step 3: route block to the appropriate chunker ---
@@ -365,7 +365,7 @@ class IngestionPipeline:
         # 4. Definition extraction: Round 1 (dedicated sections)
         for section in structure.sections:
             if not section.is_front_matter:
-                text = " \n".join(section_texts.get(section.page_start, []))
+                text = " \n".join(section_texts.get(id(section), []))
                 def_chunks = self._definition_chunker.extract_from_section(
                     section_text=text,
                     section=section,

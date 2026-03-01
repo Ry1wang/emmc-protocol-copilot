@@ -199,6 +199,85 @@ def _extract_version(filename: str) -> str:
     return "unknown"
 
 
+def _has_heading_decorations(plumber_page: object, page_width: float) -> bool:
+    """Return True if the page contains JEDEC chapter-heading decorations.
+
+    Each major section heading in the eMMC spec is wrapped by two full-width solid
+    horizontal lines spaced ~22 pt apart (the heading title sits in that gap).
+    These decorative lines are NOT table borders, but pdfplumber's text-alignment
+    vertical strategy mistakes them for table borders and generates spurious tables.
+
+    Detection: find a pair of wide horizontal edges (>= 60% page width) whose
+    inner vertical gap is between 10 and 30 pt.
+    """
+    h_edges = [e for e in plumber_page.edges if e.get("orientation") == "h"]  # type: ignore[attr-defined]
+    wide = sorted(
+        [e for e in h_edges if abs(e["x1"] - e["x0"]) > page_width * 0.60],
+        key=lambda e: e["top"],
+    )
+    for i in range(len(wide) - 1):
+        gap = wide[i + 1]["top"] - wide[i]["bottom"]
+        if 10.0 <= gap <= 30.0:
+            return True
+    return False
+
+
+def _is_plausible_table(
+    rows: list[list[str | None]],
+    bbox: tuple[float, float, float, float],
+    page_width: float,
+) -> bool:
+    """Return False for false-positive tables caused by decorative heading lines + text strategy.
+
+    Chapter heading decorations in JEDEC eMMC specs consist of two full-width horizontal
+    solid lines spaced ~22 pt apart.  When pdfplumber's text-alignment vertical strategy
+    is applied, these lines become the table's horizontal borders and the natural word
+    spacing within the heading text creates 15-20 spurious vertical "columns".
+
+    Rejection criteria (both must be true):
+      - ncols > 8  : genuine eMMC tables never exceed 8-9 columns
+      - fill_rate < 35%: real column-aligned tables consistently fill > 50% of cells
+    """
+    if not rows:
+        return False
+
+    ncols = max((len(row) for row in rows), default=0)
+    if ncols <= 8:
+        return True  # column count is reasonable — keep without further checks
+
+    # Check 1: "lone heading row" pattern.
+    # In a heading-decoration false table the first and/or last row contains exactly
+    # one non-empty cell (the heading title) while all other cells are empty.
+    # This is an unambiguous signature — no genuine data table has this structure.
+    def _is_lone_heading_row(row: list[str | None]) -> bool:
+        non_empty = sum(1 for c in row if c and c.strip())
+        return non_empty == 1
+
+    if _is_lone_heading_row(rows[0]) or _is_lone_heading_row(rows[-1]):
+        logger.debug(
+            "Rejected false table (lone heading-row pattern): "
+            "ncols=%d bbox=(%.0f,%.0f,%.0f,%.0f)",
+            ncols, *bbox,
+        )
+        return False
+
+    # Check 2: overall fill rate.
+    # Real high-column tables (e.g. capability matrices) have consistent column fill.
+    total_cells = sum(len(row) for row in rows)
+    non_empty = sum(1 for row in rows for c in row if c and c.strip())
+    fill_rate = non_empty / total_cells if total_cells > 0 else 0
+
+    if fill_rate < 0.40:
+        logger.debug(
+            "Rejected false table (low fill rate): "
+            "ncols=%d fill_rate=%.0f%% bbox=(%.0f,%.0f,%.0f,%.0f)",
+            ncols, fill_rate * 100, *bbox,
+        )
+        return False
+
+    return True
+
+
 def _clean_text(text: str) -> str:
     """Clean watermark noise and normalise whitespace.
 
@@ -447,9 +526,13 @@ class PDFParser:
             # Try primary strategy (lines)
             found_tables = plumber_page.find_tables(table_settings=table_settings)
             
-            # P1 fallback: If no tables found by lines, try text-alignment strategy 
-            # (common for register bit definition tables in JEDEC pdfs)
-            if not found_tables:
+            # P1 fallback: If no tables found by lines, try text-alignment strategy
+            # (useful for register bit definition tables aligned by text position).
+            # Guard: skip this fallback on pages with chapter-heading decorations
+            # (two full-width horizontal rules ~22pt apart) because those decorative
+            # lines are misread as table borders by the text strategy, producing
+            # spurious 15-20-column tables.
+            if not found_tables and not _has_heading_decorations(plumber_page, page_width):
                 table_settings["vertical_strategy"] = "text"
                 found_tables = plumber_page.find_tables(table_settings=table_settings)
 
@@ -457,7 +540,12 @@ class PDFParser:
                 bbox_raw = table.bbox  # (x0, top, x1, bottom)
                 bbox = (bbox_raw[0], bbox_raw[1], bbox_raw[2], bbox_raw[3])
                 rows = table.extract()
-                
+
+                # Reject false-positive tables produced by decorative heading lines
+                # (two full-width horizontal rules misread by the text strategy as a table)
+                if not _is_plausible_table(rows, bbox, page_width):
+                    continue
+
                 # Cleanup cell data: strip and filter out line noise
                 if rows:
                     clean_rows = []

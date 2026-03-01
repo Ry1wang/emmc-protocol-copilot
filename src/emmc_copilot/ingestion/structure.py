@@ -84,8 +84,19 @@ def _is_front_matter_title(title: str) -> bool:
 
 
 def _normalize_label(text: str) -> str:
-    """Normalize a heading label for lookup (lowercase, single spaces, ASCII-only-ish)."""
+    """Normalize a heading label for lookup (lowercase, single spaces, eMMC unified).
+
+    The eMMC bullet character (U+2022 •) appears in TOC bookmarks extracted by
+    fitz, while the same character is rendered as an ASCII asterisk ' *' in page
+    body text extracted by PyMuPDF.  Both variants must map to the same key so
+    that label_to_section lookups work regardless of the extraction source.
+    """
     text = text.strip().lower()
+    # Unify eMMC variant spellings before whitespace collapse:
+    #   TOC:  "e•mmc"  (U+2022 bullet, possibly with surrounding spaces)
+    #   body: "e *mmc" (ASCII asterisk, space before)
+    #   other variants: "e∙mmc", "e.mmc", "e-mmc"
+    text = re.sub(r"e[\s]*[•∙*.‐\-]+[\s]*mmc", "emmc", text)
     text = re.sub(r"\s+", " ", text)
     # Remove trailing/leading punctuation
     text = text.strip(". ")
@@ -215,15 +226,36 @@ class StructureExtractor:
     def _build_page_map(
         self, sections: list[SectionNode]
     ) -> dict[int, SectionNode]:
-        """Map each physical page number to the deepest covering SectionNode."""
+        """Map each physical page number to the deepest covering SectionNode.
+
+        Tie-breaking rule (same level):
+          Use >= so that when multiple sections of the same level all start on
+          the same page (e.g. "1 Scope", "2 Normative reference", "3 Terms and
+          definitions" all at page_start=22), the LAST one in TOC order wins.
+          This reflects the "most recently active" section at that page boundary,
+          which is the correct section for content that continues on the next page.
+        """
         page_to_section: dict[int, SectionNode] = {}
 
         for page_num in range(1, self.total_pages + 1):
             best: SectionNode | None = None
             for node in sections:
                 if node.page_start <= page_num <= node.page_end:
-                    if best is None or node.level > best.level:
+                    if best is None:
                         best = node
+                    elif node.level > best.level:
+                        # Deeper (more specific) section always wins
+                        best = node
+                    elif node.level == best.level:
+                        # Same level: prefer the section that starts LATER.
+                        # When multiple siblings share the same page (e.g. "1 Scope",
+                        # "2 Normative reference", "3 Terms and definitions" all at
+                        # page_start=22), the last-starting one is the "most recently
+                        # active" section for content that continues on subsequent pages.
+                        # A section with a much earlier page_start (e.g. a document-wide
+                        # catch-all entry) correctly loses to a later-starting sibling.
+                        if node.page_start >= best.page_start:
+                            best = node
             if best is not None:
                 page_to_section[page_num] = best
 

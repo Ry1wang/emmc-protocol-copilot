@@ -242,13 +242,28 @@ class IngestionPipeline:
             for cb in classified:
                 # --- Step 1: sub-page section detection (fine-grained) ---
                 #
-                # If this text block's exact text matches a TOC label, a section
-                # boundary occurs mid-page.  Flush the old section's accumulator
-                # before switching.
+                # Two matching strategies:
+                # a) Exact match: block text == TOC label (standalone heading).
+                # b) Prefix match: block text STARTS WITH a TOC label followed by
+                #    a word boundary.  This handles the common case where PyMuPDF
+                #    merges a section heading with its first paragraph into a single
+                #    text block (e.g. "5.1 eMMC System Overview The eMMC spec...").
                 if cb.text_block and cb.content_type == ContentType.TEXT:
-                    hit_section = structure.label_to_section.get(
-                        _normalize_label(cb.text_block.text)
-                    )
+                    norm = _normalize_label(cb.text_block.text)
+                    hit_section = structure.label_to_section.get(norm)
+
+                    # Prefix match fallback (only for blocks longer than any label)
+                    if hit_section is None:
+                        for label, candidate in structure.label_to_section.items():
+                            # Require at least one extra character after label
+                            if (
+                                len(norm) > len(label)
+                                and norm.startswith(label)
+                                and norm[len(label)] in " \n\t"
+                            ):
+                                hit_section = candidate
+                                break
+
                     if hit_section and hit_section is not current_section:
                         if text_accumulator:
                             _flush_text()

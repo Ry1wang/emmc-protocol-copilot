@@ -1,31 +1,35 @@
-"""BGE-M3 embedding wrapper using FlagEmbedding."""
+"""BGE-M3 embedding wrapper using sentence-transformers.
+
+FlagEmbedding 1.3.x is incompatible with transformers>=5 due to a removed
+symbol in the reranker submodule (is_torch_fx_available). sentence-transformers
+5.x supports the same BAAI/bge-m3 model via the standard HuggingFace backend
+and is fully compatible with the current dependency stack.
+"""
 
 from __future__ import annotations
 
 import logging
-from typing import TYPE_CHECKING
-
-if TYPE_CHECKING:
-    import numpy as np
 
 logger = logging.getLogger(__name__)
 
 # Default model and batching constants
 _DEFAULT_MODEL = "BAAI/bge-m3"
 _DEFAULT_BATCH_SIZE = 32
-_MAX_LENGTH = 8192  # BGE-M3 max token length
 
 
 class BGEEmbedder:
-    """Thin wrapper around BGEM3FlagModel for dense embedding.
+    """Thin wrapper around SentenceTransformer for BGE-M3 dense embedding.
 
     Lazy-loads the model on first call to :meth:`embed` so import time
     stays fast even when the GPU driver is slow to initialise.
 
+    Output vectors are L2-normalised (unit sphere), making cosine similarity
+    equivalent to dot-product — the default for Chroma's "cosine" HNSW index.
+
     Usage::
 
         embedder = BGEEmbedder()
-        vecs = embedder.embed(["text A", "text B"])  # list[list[float]]
+        vecs = embedder.embed(["text A", "text B"])  # list[list[float]], dim=1024
     """
 
     def __init__(
@@ -45,44 +49,34 @@ class BGEEmbedder:
 
     @property
     def model(self):
-        """Load and cache the BGEM3FlagModel on first access."""
+        """Load and cache the SentenceTransformer model on first access."""
         if self._model is None:
-            from FlagEmbedding import BGEM3FlagModel  # heavy import
+            from sentence_transformers import SentenceTransformer  # heavy import
 
-            logger.info("Loading BGE-M3 model: %s (fp16=%s)", self._model_name, self._use_fp16)
-            self._model = BGEM3FlagModel(self._model_name, use_fp16=self._use_fp16)
-            logger.info("BGE-M3 model loaded.")
+            logger.info("Loading BGE-M3 via sentence-transformers: %s", self._model_name)
+            self._model = SentenceTransformer(
+                self._model_name,
+                model_kwargs={"torch_dtype": "float16"} if self._use_fp16 else {},
+            )
+            logger.info("BGE-M3 model loaded (dim=1024).")
         return self._model
 
     def embed(self, texts: list[str]) -> list[list[float]]:
-        """Encode *texts* and return dense vectors as a list of float lists.
+        """Encode *texts* and return L2-normalised dense vectors.
 
-        Texts are processed in batches of :attr:`batch_size` to avoid OOM.
+        Texts are processed in batches of :attr:`_batch_size` to avoid OOM.
         Empty input returns an empty list.
         """
         if not texts:
             return []
 
-        all_vecs: list[list[float]] = []
-        total = len(texts)
-        processed = 0
-
-        for start in range(0, total, self._batch_size):
-            batch = texts[start : start + self._batch_size]
-            result = self.model.encode(
-                batch,
-                batch_size=self._batch_size,
-                max_length=_MAX_LENGTH,
-                return_dense=True,
-                return_sparse=False,
-                return_colbert_vecs=False,
-            )
-            vecs = result["dense_vecs"]  # numpy array (batch, 1024)
-            all_vecs.extend(vecs.tolist())
-            processed += len(batch)
-            logger.debug("Embedded %d / %d texts", processed, total)
-
-        return all_vecs
+        vecs = self.model.encode(
+            texts,
+            batch_size=self._batch_size,
+            normalize_embeddings=True,   # L2 normalise → cosine ≡ dot-product
+            show_progress_bar=False,
+        )
+        return vecs.tolist()
 
     def embed_query(self, text: str) -> list[float]:
         """Convenience method for single-query embedding."""

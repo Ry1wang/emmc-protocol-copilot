@@ -9,6 +9,7 @@ from langchain_core.retrievers import BaseRetriever
 
 from ..retrieval.embedder import BGEEmbedder
 from ..retrieval.vectorstore import EMMCVectorStore
+from ..retrieval.version_filter import DEFAULT_VERSION, build_version_where, detect_versions
 
 
 class EMMCRetriever(BaseRetriever):
@@ -27,10 +28,16 @@ class EMMCRetriever(BaseRetriever):
     n_results: int = 15
     collection: str = "docs"
     score_threshold: float = 0.85  # cosine distance < 0.85 → keep (lower = more similar)
+    default_version: str = DEFAULT_VERSION  # fallback when query has no version mention
+                                            # set to "" to disable filtering (all versions)
 
     def _get_relevant_documents(self, query: str, *, run_manager) -> list[Document]:
+        detected = detect_versions(query)
+        target_versions = detected or ([self.default_version] if self.default_version else [])
+        where = build_version_where(target_versions) if target_versions else None
+
         vec = self.embedder.embed_query(query)
-        hits = self.store.query(vec, n_results=self.n_results, collection=self.collection)
+        hits = self.store.query(vec, n_results=self.n_results, where=where, collection=self.collection)
         return [
             Document(
                 page_content=h["document"],

@@ -23,6 +23,7 @@ from pydantic import ConfigDict
 from .bm25_index import BM25Corpus
 from .embedder import BGEEmbedder
 from .vectorstore import EMMCVectorStore
+from .version_filter import DEFAULT_VERSION, build_version_where, detect_versions
 
 logger = logging.getLogger(__name__)
 
@@ -89,26 +90,43 @@ class HybridRetriever(BaseRetriever):
     rrf_k: int = 60
     collection: str = "docs"
     neighbor_expand: bool = True    # expand TABLE/REGISTER chunks with adjacent rows
+    default_version: str = DEFAULT_VERSION  # fallback when query has no version mention
+                                            # set to "" to disable filtering (all versions)
 
     # Content types that benefit from neighboring-chunk expansion (row-level splits)
     _EXPAND_TYPES: frozenset[str] = frozenset({"table", "register"})
 
     def _get_relevant_documents(self, query: str, *, run_manager) -> list[Document]:
+        # --- Version filter ---
+        detected = detect_versions(query)
+        target_versions = detected or ([self.default_version] if self.default_version else [])
+        where = build_version_where(target_versions) if target_versions else None
+        logger.info(
+            "Version filter: %s (source=%s)",
+            target_versions or "all",
+            "query" if detected else ("default" if self.default_version else "none"),
+        )
+
         # --- Dense path ---
         vec = self.embedder.embed_query(query)
         raw_dense = self.store.query(
             vec,
             n_results=self.n_candidates,
+            where=where,
             collection=self.collection,
         )
         # Filter by distance threshold
         dense_hits = [h for h in raw_dense if h["distance"] < self.score_threshold]
 
-        # --- BM25 path ---
-        bm25_hits = self.bm25_corpus.search(query, n_results=self.n_candidates)
+        # --- BM25 path (post-filter by version) ---
+        all_bm25 = self.bm25_corpus.search(query, n_results=self.n_candidates)
+        bm25_hits = (
+            [h for h in all_bm25 if h["metadata"].get("version") in target_versions]
+            if target_versions else all_bm25
+        )
 
         logger.debug(
-            "HybridRetriever: %d dense hits (after threshold), %d bm25 hits",
+            "HybridRetriever: %d dense hits (after threshold), %d bm25 hits (after version filter)",
             len(dense_hits),
             len(bm25_hits),
         )

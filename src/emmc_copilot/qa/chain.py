@@ -143,6 +143,8 @@ def build_chain():
         CHROMA_PERSIST_DIR  — optional, defaults to data/vectorstore/chroma
         BM25_INDEX_DIR      — optional, defaults to data/vectorstore/bm25
         QUERY_EXPAND        — "1" (default) to enable query expansion, "0" to disable
+        EMMC_VERSION        — default version when query has no version mention;
+                              "5.1" (default) | "5.0" | "4.51" | "all" (no filter)
 
     Returns:
         (chain, retriever) — the LCEL chain and the base retriever instance.
@@ -168,6 +170,8 @@ def build_chain():
     chroma_dir = os.environ.get("CHROMA_PERSIST_DIR", "data/vectorstore/chroma")
     bm25_dir = Path(os.environ.get("BM25_INDEX_DIR", "data/vectorstore/bm25"))
     query_expand = os.environ.get("QUERY_EXPAND", "1").strip().lower() not in ("0", "false", "no")
+    _ver_env = os.environ.get("EMMC_VERSION", "5.1").strip()
+    default_version = "" if _ver_env.lower() == "all" else _ver_env
 
     embedder = BGEEmbedder()
     store = EMMCVectorStore(chroma_dir)
@@ -175,7 +179,10 @@ def build_chain():
     bm25_pkl = bm25_dir / "corpus.pkl"
     try:
         bm25_corpus = BM25Corpus.load(bm25_pkl)
-        retriever = HybridRetriever(embedder=embedder, store=store, bm25_corpus=bm25_corpus)
+        retriever = HybridRetriever(
+            embedder=embedder, store=store, bm25_corpus=bm25_corpus,
+            default_version=default_version,
+        )
         logger.info("Hybrid retriever enabled (BM25 index: %s, %d chunks)", bm25_pkl, len(bm25_corpus))
     except FileNotFoundError:
         logger.warning(
@@ -183,7 +190,12 @@ def build_chain():
             "Run: uv run python -m emmc_copilot.retrieval.cli build-bm25",
             bm25_pkl,
         )
-        retriever = EMMCRetriever(embedder=embedder, store=store)
+        retriever = EMMCRetriever(embedder=embedder, store=store, default_version=default_version)
+
+    logger.info(
+        "Version filter: default=%r (override with EMMC_VERSION env var; 'all' disables filter)",
+        default_version or "all",
+    )
 
     llm = ChatOpenAI(
         model=model,

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 import os
+import re
 from pathlib import Path
 
 from langchain_core.documents import Document
@@ -78,19 +79,34 @@ def _make_expanding_context(retriever, llm, n_final: int = 15):
     return RunnableLambda(retrieve_and_format)
 
 
+def _short_source(source: str) -> str:
+    """Abbreviate a spec filename to a compact document ID.
+
+    Examples:
+        "JESD84-B51.pdf"  → "B51"
+        "JESD84-B451.pdf" → "B451"
+        "JESD84-B50.pdf"  → "B50"
+        "other.pdf"       → "other"
+    """
+    m = re.search(r"B\d+", source, re.IGNORECASE)
+    return m.group(0).upper() if m else Path(source).stem
+
+
 def format_docs_with_citations(docs: list[Document]) -> str:
     """Format retrieved documents as a numbered context block for the LLM prompt.
 
-    Each document gets a citation header [N] that the LLM uses for inline references.
-    The section_path stored as "6/6.3/6.3.2" is displayed as "6.3.2".
+    Each excerpt gets a header with a "Cite-as:" tag that bundles the document
+    abbreviation, section number, and page number into a single locatable reference.
+    The LLM is instructed to copy this tag verbatim into inline citations.
 
     Example output::
 
         [1] Source: JESD84-B51.pdf | Pages: 49 | Section: 6.3.2 Boot partition
-        [eMMC 5.1 | 6.3.2 | Page 49]
+        Cite-as: [B51 §6.3.2 p.49]
         The boot partition size is 128 KB × BOOT_SIZE_MULT...
 
         [2] Source: JESD84-B451.pdf | Pages: 179 | Section: 7.4.24 BOOT_SIZE_MULT
+        Cite-as: [B451 §7.4.24 p.179]
         ...
     """
     parts: list[str] = []
@@ -102,13 +118,17 @@ def format_docs_with_citations(docs: list[Document]) -> str:
         pages = str(page_start) if page_start == page_end else f"{page_start}–{page_end}"
 
         raw_path = m.get("section_path", "")
-        # section_path is stored as "6/6.3/6.3.2"; take the last segment and replace / with .
         section_num = raw_path.split("/")[-1].replace("/", ".") if raw_path else ""
         section_title = m.get("section_title", "")
         section_label = f"{section_num} {section_title}".strip() if section_num else section_title
 
+        # Build the compact locatable citation tag
+        short_src = _short_source(source)
+        section_ref = f" §{section_num}" if section_num else ""
+        cite_tag = f"[{short_src}{section_ref} p.{page_start}]"
+
         header = f"[{i}] Source: {source} | Pages: {pages} | Section: {section_label}"
-        parts.append(f"{header}\n{doc.page_content}")
+        parts.append(f"{header}\nCite-as: {cite_tag}\n{doc.page_content}")
 
     return "\n\n".join(parts)
 

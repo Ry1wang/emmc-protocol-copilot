@@ -803,7 +803,7 @@ dev = [
     { name = "langsmith", specifier = ">=0.1" },
     { name = "pytest", specifier = ">=8" },
     { name = "pytest-asyncio", specifier = ">=0.23" },
-    { name = "ragas", specifier = ">=0.1" },
+    { name = "ragas", specifier = ">=0.4.3" },
 ]
 
 [[package]]

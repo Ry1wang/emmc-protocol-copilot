@@ -109,6 +109,22 @@ class EMMCIndexer:
             logger.info("No searchable chunks in %s", jsonl_path.name)
             return stats
 
+        # Deduplicate within this file: two chunks with the same deterministic ID
+        # are genuinely identical (same content + position) and only one should be indexed.
+        seen: set[str] = set()
+        unique: list = []
+        for c in searchable:
+            if c.chunk_id not in seen:
+                seen.add(c.chunk_id)
+                unique.append(c)
+        if len(unique) < len(searchable):
+            logger.warning(
+                "%s: dropped %d intra-file duplicate chunk(s)",
+                jsonl_path.name,
+                len(searchable) - len(unique),
+            )
+        searchable = unique
+
         # Identify which IDs are already in the store (skip re-embedding)
         all_ids = [c.chunk_id for c in searchable]
         existing = self._store.existing_ids(all_ids)

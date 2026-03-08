@@ -1,0 +1,63 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>eMMC Chunk Insight | Protocol Copilot</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+
+<body>
+  <div id="app">
+    <aside>
+      <div class="logo">eMMC Insight</div>
+      <p style="font-size: 0.75rem; color: var(--text-muted); margin-bottom: 1.5rem">
+        Protocol Ingestion Quality Reviewer v2.2
+      </p>
+
+      <div class="version-selector">
+        <label>Spec Version</label>
+        <select id="doc-version">
+          <option value="JESD84-B51_chunks.jsonl">v5.1 (B51)</option>
+          <option value="JESD84-B50_chunks.jsonl">v5.0 (B50)</option>
+          <option value="JESD84-B451_chunks.jsonl">v4.51 (B451)</option>
+        </select>
+      </div>
+
+      <input type="text" class="search-box" placeholder="Search text or section...">
+
+      <div class="filter-group">
+        <button class="filter-btn active" data-type="all">All Chunks</button>
+        <button class="filter-btn" data-type="front_matter">Front Matter</button>
+        <button class="filter-btn" data-type="table">Tables Only</button>
+        <button class="filter-btn" data-type="register">Register Fields</button>
+        <button class="filter-btn" data-type="text">Plain Text</button>
+        <button class="filter-btn" data-type="figure">Figures & Diagrams</button>
+      </div>
+
+      <div class="stats-card">
+        <h4 style="font-size: 0.7rem; color: #60a5fa; text-transform: uppercase; margin-bottom: 1rem">
+          Snapshot Statistics
+        </h4>
+        <div class="stats-content">
+          Loading stats...
+        </div>
+      </div>
+
+      <p style="font-size: 0.65rem; color: rgba(255,255,255,0.2); margin-top: auto;">
+        * Displaying non-frontmatter chunks only.
+      </p>
+    </aside>
+
+    <main>
+      <div style="display: flex; justify-content: center; align-items: center; height: 100%; color: var(--text-muted)">
+        Initializing viewer...
+      </div>
+    </main>
+  </div>
+
+  <script type="module" src="main.js"></script>
+</body>
+
+</html>

@@ -40,3 +40,6 @@ htmlcov/
 
 # Protocol
 docs/protocol/
+
+# Chainlit auto-generated translations (regenerated on each run)
+.chainlit/translations/
